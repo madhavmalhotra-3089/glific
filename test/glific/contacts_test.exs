@@ -1,11 +1,14 @@
 defmodule Glific.ContactsTest do
   use Glific.DataCase, async: true
+  import Mock
 
   alias Faker.Phone
 
   alias Glific.{
     Contacts,
+    Groups,
     Contacts.Contact,
+    Contacts.Import,
     Partners,
     Partners.Organization,
     Seeds.SeedsDev,
@@ -16,6 +19,7 @@ defmodule Glific.ContactsTest do
   setup do
     default_provider = SeedsDev.seed_providers()
     SeedsDev.seed_organizations(default_provider)
+    SeedsDev.seed_groups()
     :ok
   end
 
@@ -201,6 +205,55 @@ defmodule Glific.ContactsTest do
       assert contact.optout_time == nil
       assert contact.status == :invalid
       assert contact.bsp_status == :hsm
+    end
+
+    test "import_contact/3 with valid data inserts new contacts in the database" do
+      Tesla.Mock.mock(fn
+        %{method: :post} ->
+          %Tesla.Env{
+            status: 200
+          }
+      end)
+      with_mocks([{File, [], [stream!: fn("file_path") -> "" end]},
+                  {CSV, [], [decode: fn (_stram,_options) -> [
+                   {:ok, %{
+                      "name" => "Foo",
+                      "phone" => "8888888888",
+                      "opt_in" => "2020-08-11",
+                      "language" => "English"
+                    }}
+                  ] end]}]) do
+            [organization|_] = Partners.list_organizations()
+            [group|_] = Groups.list_groups(%{filter: %{}})
+
+            Import.import_contacts("file_path", organization.id,group.id)
+            count = Contacts.count_contacts(%{filter: %{name: "Foo"}})
+
+            assert count == 1
+        end
+    end
+
+    test "import_contact/3 with invalid organization id returns an error" do
+      Tesla.Mock.mock(fn
+        %{method: :post} ->
+          %Tesla.Env{
+            status: 200
+          }
+      end)
+      with_mocks([{File, [], [stream!: fn("file_path") -> "" end]},
+                  {CSV, [], [decode: fn (_stram,_options) -> [
+                   {:ok, %{
+                      "name" => "Foo",
+                      "phone" => "8888888888",
+                      "opt_in" => "2020-08-11",
+                      "language" => "English"
+                    }}
+                  ] end]}]) do
+
+            [group|_] = Groups.list_groups(%{filter: %{}})
+
+            assert {:error, _} = Import.import_contacts("file_path", 999,group.id)
+        end
     end
 
     test "update_contact/2 with valid data updates the contact",
